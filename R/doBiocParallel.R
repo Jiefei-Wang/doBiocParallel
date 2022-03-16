@@ -1,4 +1,6 @@
-registerDoBiocParallel <- function(BPPARAM, cores = NULL){
+registerDoBiocParallel <-
+    function(BPPARAM, start = TRUE)
+{
     env <- new.env(parent = emptyenv())
     env$BPPARAM <- BPPARAM
     setDoPar(doBiocParallel, env, bpinfo)
@@ -7,7 +9,7 @@ registerDoBiocParallel <- function(BPPARAM, cores = NULL){
     if (bpisup(BPPARAM))
         gc()
     ## start the cluster if not
-    if (!bpisup(BPPARAM)){
+    if (!bpisup(BPPARAM) && start){
         tryCatch({
             bpstart(BPPARAM)
         },
@@ -25,7 +27,9 @@ registerDoBiocParallel <- function(BPPARAM, cores = NULL){
 }
 
 # passed to setDoPar via registerDoBiocParallel, and called by getDoParWorkers, etc
-bpinfo <- function(data, item) {
+bpinfo <-
+    function(data, item)
+{
     switch(item,
            workers=bpworkers(data),
            name=paste0('doBiocParallel-', class(data)[1]),
@@ -33,7 +37,9 @@ bpinfo <- function(data, item) {
            NULL)
 }
 
-makeExportEnv <- function(obj, expr, envir) {
+makeExportEnv <-
+    function(obj, expr, envir)
+{
     # setup the parent environment by first attempting to create an environment
     # that has '...' defined in it with the appropriate values
     exportenv <- tryCatch({
@@ -94,7 +100,34 @@ makeExportEnv <- function(obj, expr, envir) {
     exportenv
 }
 
+evalWrapper <-
+    function(..., expr, exportenv)
+{
+    args <- list(...)
+    for (i in names(args))
+        assign(i, args[[i]], pos=exportenv, inherits=FALSE)
+    eval(expr, envir = exportenv)
+}
 
+accumulator <-
+    function(obj, results)
+{
+    defcmb <- foreach(i=1)$combineInfo$fun
+    ## return the result if no combine method is specified
+    if (identical(obj$combineInfo$fun,defcmb))
+        return(results)
+
+    combinedResults <- obj$combineInfo$init
+    idx <- seq_along(results)
+    if (is.null(obj$combineInfo$init)) {
+        combinedResults <- results[[1]]
+        idx <- idx[-1]
+    }
+    for (i in idx) {
+        combinedResults <- obj$combineInfo$fun(combinedResults, results[[i]])
+    }
+    combinedResults
+}
 
 doBiocParallel <- function(obj, expr, envir, data) {
     ## TODO: disable auto export
@@ -106,6 +139,7 @@ doBiocParallel <- function(obj, expr, envir, data) {
     exportenv <- makeExportEnv(obj, expr, envir)
     packages <- unique(obj$packages)
 
+    ## The arguments that will be looped over
     argNames <- names(obj$args)
     args <- lapply(
         argNames,
@@ -113,6 +147,16 @@ doBiocParallel <- function(obj, expr, envir, data) {
     )
     names(args) <- argNames
 
+    ## prepare for bpoptions
+    optionsArgs <- list(
+        exportglobals = FALSE,
+        packages = packages
+    )
+    if (obj$errorHandling %in% c("remove", "pass"))
+        optionsArgs$stop.on.error <- FALSE
+    opts <- do.call(bpoptions, optionsArgs)
+
+    ## bpmapply arguments: FUN, ..., MoreArgs, SIMPLIFY, BPPARAM
     allArgs <- c(
         list(FUN = evalWrapper),
         args,
@@ -120,20 +164,50 @@ doBiocParallel <- function(obj, expr, envir, data) {
             MoreArgs = list(
                 expr = as.expression(expr),
                 exportenv = exportenv,
-                packages = packages
+                BPOPTIONS = opts
             ),
             SIMPLIFY = FALSE,
             BPPARAM = BPPARAM
         )
     )
-    do.call(what = bpmapply, args = allArgs, quote = FALSE)
+    error <- NULL
+    results <- tryCatch(
+        do.call(what = bpmapply, args = allArgs, quote = FALSE),
+        error = function(e) error <<- e
+    )
+
+    ## handle errors
+    ## Three handlers: stop, remove, pass
+    if (!is.null(error)) {
+        ## stop immediately
+        if (obj$errorHandling == "stop")
+            stop(error)
+        results <- bpresult(error)
+        ## filter out the errors
+        if (obj$errorHandling == "remove")
+            results <- results[bpok(results)]
+        ## strip attributes(for "REDOENV")
+        attributes(results) <- NULL
+        ## do nothing if handler is "pass"
+    }
+
+    ## combine the results
+    results <- tryCatch(accumulator(obj, results), error=function(e) {
+        cat('error calling combine function:\n')
+        print(e)
+        results
+    })
+
+    ## execute final function if exists
+    if (!is.null(obj$final))
+        obj$final(results)
+    else
+        results
 }
 
-evalWrapper <- function(..., expr, exportenv, packages) {
-    for (i in packages)
-        library(i, character.only = TRUE)
-    args <- list(...)
-    for (i in names(args))
-        assign(i, args[[i]], pos=exportenv, inherits=FALSE)
-    eval(expr, envir = exportenv)
-}
+
+
+
+
+
+
