@@ -18,7 +18,6 @@ registerDoBiocParallel <-
             stop(e)
         })
         reg.finalizer(env, function(e){
-            message("Hi")
             if (bpisup(BPPARAM))
                 bpstop(BPPARAM)
         })
@@ -139,13 +138,21 @@ doBiocParallel <- function(obj, expr, envir, data) {
     exportenv <- makeExportEnv(obj, expr, envir)
     packages <- unique(obj$packages)
 
-    ## The arguments that will be looped over
     argNames <- names(obj$args)
-    args <- lapply(
-        argNames,
-        function(i) eval(obj$args[[i]])
-    )
-    names(args) <- argNames
+    if (!is.null(argNames)) {
+        ## named arguments
+        args <- lapply(
+            argNames,
+            function(i) eval(obj$args[[i]], envir = envir)
+        )
+        names(args) <- argNames
+    } else {
+        ## unnamed argument specifying the loop number
+        loopNumber <- eval(obj$args[[1]], envir = envir)
+        stopifnot(length(loopNumber) == 1)
+        args <- list(seq_len(loopNumber))
+        names(args) <- "BIOCPARALLEL_DUMMY_ARGUMENT"
+    }
 
     ## prepare for bpoptions
     optionsArgs <- list(
