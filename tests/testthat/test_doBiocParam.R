@@ -106,7 +106,7 @@ test_that("auto export", {
 })
 
 test_that("no export", {
-    x
+    x <- 1
     expect_error(
         foreach(i = 1:3, .noexport = "x")%dopar%{
             x

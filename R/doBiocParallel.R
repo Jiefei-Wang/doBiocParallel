@@ -138,7 +138,16 @@ doBiocParallel <- function(obj, expr, envir, data) {
     exportenv <- makeExportEnv(obj, expr, envir)
     packages <- unique(obj$packages)
 
+    ## Prepare the loop argument
     argNames <- names(obj$args)
+    ## exclude BPOPTIONS
+    idx <- which(argNames == "BPOPTIONS")
+    if (length(idx)) {
+        argNames <- argNames[-idx]
+        BPOPTIONS <- eval(obj$args[[idx]], envir = envir)
+    } else {
+        BPOPTIONS <- list()
+    }
     if (!is.null(argNames)) {
         ## named arguments
         args <- lapply(
@@ -162,19 +171,20 @@ doBiocParallel <- function(obj, expr, envir, data) {
     if (obj$errorHandling %in% c("remove", "pass"))
         optionsArgs$stop.on.error <- FALSE
     opts <- do.call(bpoptions, optionsArgs)
+    BPOPTIONS[names(opts)] <- opts
 
-    ## bpmapply arguments: FUN, ..., MoreArgs, SIMPLIFY, BPPARAM
+    ## bpmapply arguments: FUN, ..., MoreArgs, SIMPLIFY, BPPARAM, BPOPTIONS
     allArgs <- c(
         list(FUN = evalWrapper),
         args,
         list(
             MoreArgs = list(
                 expr = as.expression(expr),
-                exportenv = exportenv,
-                BPOPTIONS = opts
+                exportenv = exportenv
             ),
             SIMPLIFY = FALSE,
-            BPPARAM = BPPARAM
+            BPPARAM = BPPARAM,
+            BPOPTIONS = BPOPTIONS
         )
     )
     error <- NULL
