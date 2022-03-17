@@ -62,12 +62,17 @@ test_that(".combine + .init", {
     expect_equal(res, 16)
 })
 
+## TODO: I did not stop in error
 test_that("loop with error", {
-    expect_error(
+    res <- tryCatch(
         foreach(i = 1:3)%dopar%{
             if (i==2)stop()
-        }
+            i
+        },
+        error = function(e) e
     )
+    expect_true(is(res, "error"))
+
 })
 
 test_that("loop with error, .errorhandling = 'pass'", {
